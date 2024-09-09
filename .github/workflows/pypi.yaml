@@ -1,0 +1,78 @@
+name: Upload to PyPI
+
+on:
+  push:
+    branches:
+      - 'main'
+jobs:
+  build-sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build sources
+        run: |-
+          pip install build
+          python -mbuild -n -s
+      - name: Upload sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-sources
+          path: dist/*.tar.gz
+          retention-days: 2
+
+  build-wheels:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, cibw_arch: AMD64 }
+          - { os: windows-latest, cibw_arch: ARM64 }
+          - { os: ubuntu-latest,  cibw_arch: x86_64 }
+          - { os: ubuntu-latest,  cibw_arch: aarch64, qemu_arch: arm64 }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up QEMU
+        if: matrix.qemu_arch != ''
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{matrix.qemu_arch}}
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.20
+        env:
+          CIBW_ARCHS: ${{matrix.cibw_arch}}
+          CIBW_SKIP: "pp* cp313-*"
+          CIBW_TEST_SKIP: "*-*linux_aarch64 *-macosx_x86_64 *-win_arm64"
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-wheels-${{matrix.os}}-${{matrix.cibw_arch}}
+          path: wheelhouse/*.whl
+          retention-days: 2
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-sdist, build-wheels]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: Check artifacts
+        run: ls -l dist
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{github.token}}
+          GH_REPO: ${{github.repository}}
